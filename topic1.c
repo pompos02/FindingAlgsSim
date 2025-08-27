@@ -4,9 +4,55 @@
 #include <stdbool.h>
 #include <math.h>
 #include <time.h>
-#define MAX_PATH_LENGTH 100000 
-#define MAX_STATE 100000  // Define this according to your state space size
-bool visitedStates[MAX_STATE] = {false};
+#define MAX_PATH_LENGTH 10000
+
+// Simple hash table for visited states
+#define HASH_SIZE 1000000 
+typedef struct HashNode {
+    unsigned long value;
+    struct HashNode* next;
+} HashNode;
+
+HashNode* visitedStates[HASH_SIZE] = {NULL};
+
+unsigned long hash(unsigned long value) {
+    return value % HASH_SIZE;
+}
+
+bool isVisited(unsigned long value) {
+    unsigned long index = hash(value);
+    HashNode* current = visitedStates[index];
+    while (current != NULL) {
+        if (current->value == value) {
+            return true;
+        }
+        current = current->next;
+    }
+    return false;
+}
+
+void markVisited(unsigned long value) {
+    if (isVisited(value)) {
+        return;
+    }
+    unsigned long index = hash(value);
+    HashNode* newNode = (HashNode*)malloc(sizeof(HashNode));
+    newNode->value = value;
+    newNode->next = visitedStates[index];
+    visitedStates[index] = newNode;
+}
+
+void clearVisited() {
+    for (int i = 0; i < HASH_SIZE; i++) {
+        HashNode* current = visitedStates[i];
+        while (current != NULL) {
+            HashNode* temp = current;
+            current = current->next;
+            free(temp);
+        }
+        visitedStates[i] = NULL;
+    }
+}
 void writeSolutionToFile(const char *filename, const char *path, unsigned long totalCost) {
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
@@ -20,8 +66,8 @@ void writeSolutionToFile(const char *filename, const char *path, unsigned long t
     strcpy(pathCopy, path);
     char *token = strtok(pathCopy, " ");
     while (token != NULL) {
-        
         numInstructions++; // Count each instruction
+
         char *instruction = token;
         token = strtok(NULL, " "); // Skip the value
         if (token == NULL) break; // Safety check
@@ -86,6 +132,7 @@ void writeSolutionToFile(const char *filename, const char *path, unsigned long t
 typedef struct {
     unsigned long value;
     unsigned long cost;
+    unsigned long depth;
     char path[MAX_PATH_LENGTH];
 } State;
 
@@ -125,7 +172,7 @@ void enqueue(Node **head, Node **tail, State state) {
 // Stack pop function for DFS
 State pop(Node **head) {
     if (*head == NULL) {
-        State emptyState = {0, 0, ""};
+        State emptyState = {0, 0, 0, ""};
         return emptyState;
     }
     Node *temp = *head;
@@ -137,6 +184,14 @@ State pop(Node **head) {
 
 // Queue dequeue function for BFS
 State dequeue(Node **head, Node **tail) {
+    if(*head == NULL) {
+        *tail = NULL;
+        State emptyState = {0, 0, 0, ""};
+        return emptyState;
+    }
+    if ((*head)->next == NULL) {
+        *tail = NULL;
+    }
     return pop(head);
 }
 
@@ -189,7 +244,7 @@ unsigned long heuristic(unsigned long currentValue, unsigned long targetValue) {
             if (currentValue / 2 >= targetValue && currentValue > 1) {
                 // Use half if it doesn't undershoot and is valid
                 currentValue /= 2;
-                estimatedCost += currentValue / 4 + 1;
+                estimatedCost += (currentValue * 2) / 4 + 1;
             } else {
                 // Otherwise, use decrease
                 currentValue--;
@@ -215,7 +270,7 @@ Node *extractMin(Node **head, unsigned long target) {
 
     while (current != NULL) {
         unsigned long currentPriority = current->state.cost + heuristic(current->state.value, target);
-        unsigned long minPriority = minNode->state.cost + heuristic(current->state.value, target);
+        unsigned long minPriority = minNode->state.cost + heuristic(minNode->state.value, target);
         if (currentPriority < minPriority) {
             minNode = current;
             prevToMin = prev;
@@ -276,9 +331,7 @@ void sortedInsert(Node **head, State state, unsigned long target) {
     }
 }
 void resetVisitedStates() {
-    for (int i = 0; i < MAX_STATE; i++) {
-        visitedStates[i] = false;
-    }
+    clearVisited();
 }
 void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long target, bool isAStar) {
     State newState;
@@ -288,15 +341,16 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value += 1;
         newState.cost += 2;
+        newState.depth += 1;
         // Append operation to path
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " increase %lu", newState.value);
         strcat(newState.path, operation);
         // Insert new state in sorted order
-        if (newState.value < MAX_STATE && !visitedStates[newState.value]) {
-            visitedStates[newState.value] = true;  // Mark as visited
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
             if (isAStar) {
-                sortedInsert(head, newState, target);
+                sortedInsertForAStar(head, newState, target);
             } else {
                 sortedInsert(head, newState, target);
             }
@@ -308,11 +362,17 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value -= 1;
         newState.cost += 2;
-        snprintf(newState.path, sizeof(newState.path), "%s decrease %lu", currentState.path, newState.value);
-        if (isAStar) {
-            sortedInsertForAStar(head, newState, target);
-        } else {
-            sortedInsert(head, newState, target);
+        newState.depth += 1;
+        char operation[50];
+        snprintf(operation, sizeof(operation), " decrease %lu", newState.value);
+        strcat(newState.path, operation);
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
+            if (isAStar) {
+                sortedInsertForAStar(head, newState, target);
+            } else {
+                sortedInsert(head, newState, target);
+            }
         }
     }
 
@@ -321,11 +381,17 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value *= 2;
         newState.cost += currentState.value / 2 + 1;
-        snprintf(newState.path, sizeof(newState.path), "%s double %lu", currentState.path, newState.value);
-        if (isAStar) {
-            sortedInsertForAStar(head, newState, target);
-        } else {
-            sortedInsert(head, newState, target);
+        newState.depth += 1;
+        char operation[50];
+        snprintf(operation, sizeof(operation), " double %lu", newState.value);
+        strcat(newState.path, operation);
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
+            if (isAStar) {
+                sortedInsertForAStar(head, newState, target);
+            } else {
+                sortedInsert(head, newState, target);
+            }
         }
     }
 
@@ -334,11 +400,17 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value /= 2;
         newState.cost += currentState.value / 4 + 1;
-        snprintf(newState.path, sizeof(newState.path), "%s half %lu", currentState.path, newState.value);
-        if (isAStar) {
-            sortedInsertForAStar(head, newState, target);
-        } else {
-            sortedInsert(head, newState, target);
+        newState.depth += 1;
+        char operation[50];
+        snprintf(operation, sizeof(operation), " half %lu", newState.value);
+        strcat(newState.path, operation);
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
+            if (isAStar) {
+                sortedInsertForAStar(head, newState, target);
+            } else {
+                sortedInsert(head, newState, target);
+            }
         }
     }
 
@@ -347,11 +419,17 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value *= newState.value;
         newState.cost += (newState.value - currentState.value) / 4 + 1;
-        snprintf(newState.path, sizeof(newState.path), "%s square %lu", currentState.path, newState.value);
-        if (isAStar) {
-            sortedInsertForAStar(head, newState, target);
-        } else {
-            sortedInsert(head, newState, target);
+        newState.depth += 1;
+        char operation[50];
+        snprintf(operation, sizeof(operation), " square %lu", newState.value);
+        strcat(newState.path, operation);
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
+            if (isAStar) {
+                sortedInsertForAStar(head, newState, target);
+            } else {
+                sortedInsert(head, newState, target);
+            }
         }
     }
 
@@ -360,11 +438,17 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
         newState = currentState;
         newState.value = sqrt(newState.value);
         newState.cost += (currentState.value - newState.value) / 4 + 1;
-        snprintf(newState.path, sizeof(newState.path), "%s root %lu", currentState.path, newState.value);
-        if (isAStar) {
-            sortedInsertForAStar(head, newState, target);
-        } else {
-            sortedInsert(head, newState, target);
+        newState.depth += 1;
+        char operation[50];
+        snprintf(operation, sizeof(operation), " root %lu", newState.value);
+        strcat(newState.path, operation);
+        if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)) {
+            markVisited(newState.value);
+            if (isAStar) {
+                sortedInsertForAStar(head, newState, target);
+            } else {
+                sortedInsert(head, newState, target);
+            }
         }
     }
     // Similar implementation for other operations (decrease, double, half, square, root)
@@ -372,19 +456,26 @@ void applyOperationsAndAddStates2(Node **head, State currentState, unsigned long
 // Function to apply operations and add new states to the stack/queue
 void applyOperationsAndAddStates(Node **head, Node **tail, State currentState, bool isBFS) {
     State newState;
+    
+    // Depth limit for DFS to prevent infinite recursion
+    if (!isBFS && currentState.depth > 50) {
+        return;
+    }
 
     // Increase
     if (currentState.value < 1000000000) {
         newState = currentState;
         newState.value += 1;
         newState.cost += 2;
+        newState.depth += 1;
          // Convert the new value to a string and append it along with the operation name
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " increase %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-            if (isBFS) enqueue(head, tail, newState); else push(head, newState);
-         }
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
         
     }
 
@@ -393,26 +484,29 @@ void applyOperationsAndAddStates(Node **head, Node **tail, State currentState, b
         newState = currentState;
         newState.value -= 1;
         newState.cost += 2;
+        newState.depth += 1;
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " decrease %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-
-         }
-        if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
     }
 
     // Double
-    if (currentState.value > 0 && currentState.value <= 1000000000) {
+    if (currentState.value > 0 && currentState.value <= 500000000) {
         newState = currentState;
         newState.value *= 2;
         newState.cost += currentState.value / 2 + 1;
+        newState.depth += 1;
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " double %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-            if (isBFS) enqueue(head, tail, newState); else push(head, newState);
-         }
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
         
     }
 
@@ -421,12 +515,14 @@ void applyOperationsAndAddStates(Node **head, Node **tail, State currentState, b
         newState = currentState;
         newState.value /= 2;
         newState.cost += currentState.value / 4 + 1;
+        newState.depth += 1;
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " half %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-            if (isBFS) enqueue(head, tail, newState); else push(head, newState);
-         }
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
         
     }
 
@@ -435,12 +531,14 @@ void applyOperationsAndAddStates(Node **head, Node **tail, State currentState, b
         newState = currentState;
         newState.value *= newState.value;
         newState.cost += (newState.value - currentState.value) / 4 + 1;
+        newState.depth += 1;
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " square %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-            if (isBFS) enqueue(head, tail, newState); else push(head, newState);
-         }
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
         
     }
 
@@ -449,20 +547,24 @@ void applyOperationsAndAddStates(Node **head, Node **tail, State currentState, b
         newState = currentState;
         newState.value = sqrt(newState.value);
         newState.cost += (currentState.value - newState.value) / 4 + 1;
+        newState.depth += 1;
         char operation[50]; // Size should be enough to hold the operation and number
         snprintf(operation, sizeof(operation), " root %lu", newState.value);
         strcat(newState.path, operation);
-         if (!isCycle(currentState.path, newState.value)){
-            if (isBFS) enqueue(head, tail, newState); else push(head, newState);
-         }
+         if (!isCycle(currentState.path, newState.value) && !isVisited(newState.value)){
+             markVisited(newState.value);
+             if (isBFS) enqueue(head, tail, newState); else push(head, newState);
+          }
         
     }
 }
 
 // Breadth-First Search implementation
 void breadthFirstSearch(unsigned long start, unsigned long target, const char *filename) {
+    resetVisitedStates();
     Node *queueHead = NULL, *queueTail = NULL;
-    State initialState = {start, 0, ""};
+    State initialState = {start, 0, 0, ""};
+    markVisited(start);
     enqueue(&queueHead, &queueTail, initialState);
 
     while (!isEmpty(queueHead)) {
@@ -478,9 +580,10 @@ void breadthFirstSearch(unsigned long start, unsigned long target, const char *f
 
 // Depth-First Search implementation
 void depthFirstSearch(unsigned long start, unsigned long target, const char *filename) {
+    resetVisitedStates();
     Node *stackHead = NULL;
-    State initialState = {start, 0, ""};
-    
+    State initialState = {start, 0, 0, ""};
+    markVisited(start);
     push(&stackHead, initialState);
 
     while (!isEmpty(stackHead)) {
@@ -494,8 +597,10 @@ void depthFirstSearch(unsigned long start, unsigned long target, const char *fil
 }
 
 void bestFirstSearch(unsigned long start, unsigned long target, const char *filename) {
+    resetVisitedStates();
     Node *priorityQueue = NULL;
-    State initialState = {start, 0, ""};
+    State initialState = {start, 0, 0, ""};
+    markVisited(start);
     sortedInsert(&priorityQueue, initialState, target);
 
     while (!isEmpty(priorityQueue)) {
@@ -512,8 +617,8 @@ void bestFirstSearch(unsigned long start, unsigned long target, const char *file
 void aStarSearch(unsigned long start, unsigned long target, const char *filename) {
     resetVisitedStates();
     Node *priorityQueue = NULL;
-    State initialState = {start, 0, ""};
-    applyOperationsAndAddStates2(&priorityQueue, initialState, target, true); // Add initial state
+    State initialState = {start, 0, 0, ""};
+    sortedInsertForAStar(&priorityQueue, initialState, target);
 
     while (!isEmpty(priorityQueue)) {
         Node *node = extractMin(&priorityQueue, target); // Extract state with the lowest cost + heuristic
@@ -550,7 +655,7 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(method, "best") == 0) {
         bestFirstSearch(start, target, filename);
     } else {
-        printf("Invalid search method. Choose 'breadth' or 'depth'.\n");
+        printf("Invalid search method. Choose 'breadth', 'depth', 'astar', or 'best'.\n");
         return 1;
     }
     clock_t end = clock();

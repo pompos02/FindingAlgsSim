@@ -1,0 +1,10 @@
+9, 17163
+double 4 3
+square 16 61
+square 256 16321
+double 512 257
+double 1024 513
+increase 1025 2
+increase 1026 2
+increase 1027 2
+increase 1028 2
